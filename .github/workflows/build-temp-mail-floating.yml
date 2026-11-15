@@ -1,0 +1,81 @@
+name: Build Temp Mail with Floating OTP Assistant
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-temp-mail-floating.yml'
+      - '.github/patches/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)
+          test -n "$SDKMANAGER" || { echo 'sdkmanager not found'; exit 1; }
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
+            'platform-tools' \
+            'platforms;android-36' \
+            'build-tools;36.0.0'
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Download JADX
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip -o jadx.zip
+          unzip -q jadx.zip -d tools/jadx
+          chmod +x tools/jadx/bin/jadx
+
+      - name: Decompile the unchanged original APK
+        shell: bash
+        run: |
+          set -uo pipefail
+          tools/jadx/bin/jadx --show-bad-code --deobf --export-gradle \
+            --export-gradle-type android-app -d work/temp-mail-decompiled com.tempmail-4.09.apk
+          jadx_status=$?
+          set -e
+          if [[ "$jadx_status" -ne 0 && "$jadx_status" -ne 3 ]]; then
+            echo "JADX failed with exit code $jadx_status"
+            exit "$jadx_status"
+          fi
+          test -d work/temp-mail-decompiled/app/src/main
+          if [[ "$jadx_status" -eq 3 ]]; then
+            echo '::warning::JADX reported partial source reconstruction; proceeding to compile the generated project.'
+          fi
+
+      - name: Add the assistant to Temp Mail's existing overlay
+        run: python3 .github/patches/apply_float_assistant.py work/temp-mail-decompiled
+
+      - name: Build Temp Mail debug APK
+        working-directory: work/temp-mail-decompiled
+        run: gradle --no-daemon :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TempMail-4.09-Floating-OTP-assistant-debug
+          path: work/temp-mail-decompiled/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
