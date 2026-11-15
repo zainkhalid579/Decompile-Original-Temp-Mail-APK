@@ -47,7 +47,8 @@ jobs:
       - name: Decompile APK to Java sources and resources
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          set +e
           tools/jadx/bin/jadx \
             --show-bad-code \
             --deobf \
@@ -55,6 +56,31 @@ jobs:
             --export-gradle-type android-app \
             -d output/temp-mail-decompiled \
             com.tempmail-4.09.apk
+          jadx_status=$?
+          set -e
+
+          # JADX 1.5.6 returns 3 when some methods cannot be reconstructed.
+          # It still writes the decompiled project; retain that output and upload
+          # it, while treating other failures or missing source output as fatal.
+          if [[ "$jadx_status" -ne 0 && "$jadx_status" -ne 3 ]]; then
+            echo "JADX failed with unexpected exit code $jadx_status"
+            exit "$jadx_status"
+          fi
+
+          test -d output/temp-mail-decompiled || {
+            echo 'JADX did not create the output directory.'
+            exit 1
+          }
+          java_count=$(find output/temp-mail-decompiled -type f -name '*.java' | wc -l)
+          file_count=$(find output/temp-mail-decompiled -type f | wc -l)
+          if [[ "$java_count" -eq 0 || "$file_count" -eq 0 ]]; then
+            echo "JADX output is empty (Java files: $java_count, total files: $file_count)."
+            exit 1
+          fi
+          echo "Decompiled output contains $java_count Java files and $file_count total files."
+          if [[ "$jadx_status" -eq 3 ]]; then
+            echo '::warning::JADX reported method decompilation errors (exit 3); generated source and resources are being preserved in the artifact.'
+          fi
 
       - name: Upload decompiled project
         uses: actions/upload-artifact@v4
