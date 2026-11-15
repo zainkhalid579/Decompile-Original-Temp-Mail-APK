@@ -16,12 +16,12 @@ for file in matches:
     text = file.read_text(encoding="utf-8")
     for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
         method = declaration.group(0)
-        if "Landroid/view/WindowManager;->addView(Landroid/view/View;" not in method:
+        if "->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V" not in method:
             continue
         if "FloatingOtpAssistant;->attach" in method:
             patched = True
             break
-        add = re.search(r"invoke-virtual\s+\{([^}]+)\},\s*Landroid/view/WindowManager;->addView\(Landroid/view/View;", method)
+        add = re.search(r"invoke-(?:virtual|interface)\s+\{([^}]+)\},\s*Landroid/view/(?:WindowManager|ViewManager);->addView\(Landroid/view/View;", method)
         if not add:
             continue
         registers = [part.strip() for part in add.group(1).split(",")]
