@@ -18,6 +18,7 @@ import android.view.ViewGroup;
 import android.view.Gravity;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -186,7 +187,20 @@ public final class FloatingOtpAssistant {
             second.addView(pasteOtp, weightParams());
         }
 
-        if (mailboxAddress != null) pasteEmail.setOnClickListener(v -> paste(context, mailboxAddress.getText().toString(), status));
+        pasteEmail.setOnClickListener(v -> {
+            if (mailboxAddress != null) {
+                paste(context, mailboxAddress.getText().toString(), status);
+                return;
+            }
+            status.setText("Loading the current Temp Mail address…");
+            IO.execute(() -> {
+                String email = getCurrentEmail(context);
+                MAIN.post(() -> {
+                    if (email == null || email.isEmpty()) status.setText("Current mailbox address is unavailable.");
+                    else paste(context, email, status);
+                });
+            });
+        });
         pasteOtp.setOnClickListener(v -> {
             Object code = pasteOtp.getTag();
             if (code instanceof String) paste(context, (String) code, status);
@@ -242,15 +256,17 @@ public final class FloatingOtpAssistant {
         });
     }
 
-    private static void loadLatest(Context service, TextView status, Button pasteOtp) {
-        IO.execute(() -> {
-            try {
-                Object inbox = construct("com.tempmail.data.repository.InboxRepository", service);
-                Object list = invokeWithContinuation(inbox, "m48342I", new Object[0]);
-                if (!(list instanceof List)) throw new IllegalStateException("Inbox list is unavailable");
+    private static void loadLatest(Context context, TextView status, Button pasteOtp) {
+        try {
+            Object inbox = construct("com.tempmail.data.repository.InboxRepository", context);
+            suspendCall(inbox, "m48342I", new Object[0], value -> {
+                if (!(value instanceof List)) {
+                    status.setText("Inbox list is unavailable.");
+                    return;
+                }
                 Object latest = null;
                 long newest = Long.MIN_VALUE;
-                for (Object email : new ArrayList<>((List<?>) list)) {
+                for (Object email : new ArrayList<>((List<?>) value)) {
                     Object timestamp = call(email, "getTimestampMs");
                     if (timestamp instanceof Number && ((Number) timestamp).longValue() > newest) {
                         newest = ((Number) timestamp).longValue();
@@ -258,11 +274,11 @@ public final class FloatingOtpAssistant {
                     }
                 }
                 if (latest == null) {
-                    show(status, "No messages in this mailbox yet.");
+                    status.setText("No messages in this mailbox yet.");
                     return;
                 }
                 Object id = call(latest, "getEid");
-                Object mailRepository = construct("com.tempmail.data.repository.MailRepository", service);
+                Object mailRepository = construct("com.tempmail.data.repository.MailRepository", context);
                 suspendCall(mailRepository, "m48374C", new Object[]{String.valueOf(id)}, result -> {
                     Object mail = payload(result);
                     if (mail == null) {
@@ -282,10 +298,10 @@ public final class FloatingOtpAssistant {
                         status.setText("Inbox refreshed. No verification code found in the latest message.");
                     }
                 }, error -> status.setText("Message read failed: " + safe(error)));
-            } catch (Throwable error) {
-                show(status, "Inbox read failed: " + safe(error));
-            }
-        });
+            }, error -> status.setText("Inbox list failed: " + safe(error)));
+        } catch (Throwable error) {
+            status.setText("Inbox list failed: " + safe(error));
+        }
     }
 
     private static void suspendCall(Object owner, String method, Object[] args,
@@ -307,17 +323,20 @@ public final class FloatingOtpAssistant {
 
     private static Object invokeWithContinuation(Object owner, String name, Object[] args,
                                                  Consumer<Object> resumed, Consumer<Throwable> failed) throws Throwable {
-        Class<?> continuationType = Class.forName("kotlin.coroutines.Continuation");
+        Method call = findSuspendMethod(owner.getClass(), name, args);
+        if (call == null) throw new NoSuchMethodException(owner.getClass().getName() + "." + name);
+        Class<?> continuationType = call.getParameterTypes()[args.length];
+        if (!continuationType.isInterface()) throw new NoSuchMethodException(name + " has no Continuation parameter");
         InvocationHandler handler = (proxy, method, values) -> {
             if (method.getName().equals("getContext")) {
-                Class<?> context = Class.forName("kotlin.coroutines.EmptyCoroutineContext");
+                Class<?> context = Class.forName("kotlin.coroutines.EmptyCoroutineContext", true, continuationType.getClassLoader());
                 Field field = context.getField("f64617B");
                 return field.get(null);
             }
             if (method.getName().equals("resumeWith")) {
                 try {
                     Object result = values == null ? null : values[0];
-                    Class<?> resultKt = Class.forName("kotlin.ResultKt");
+                    Class<?> resultKt = Class.forName("kotlin.ResultKt", true, continuationType.getClassLoader());
                     Method check = resultKt.getMethod("m53922b", Object.class);
                     check.invoke(null, result);
                     resumed.accept(result);
@@ -331,38 +350,33 @@ public final class FloatingOtpAssistant {
             if (method.getName().equals("equals")) return proxy == (values == null ? null : values[0]);
             return null;
         };
-        Object continuation = Proxy.newProxyInstance(continuationType.getClassLoader(), new Class<?>[]{continuationType}, handler);
-        Class<?>[] types = new Class<?>[args.length + 1];
+        Object continuation = Proxy.newProxyInstance(continuationType.getClassLoader(),
+                new Class<?>[]{continuationType}, handler);
         Object[] values = new Object[args.length + 1];
-        for (int i = 0; i < args.length; i++) {
-            values[i] = args[i];
-            types[i] = args[i] instanceof String ? String.class : args[i].getClass();
-        }
-        types[args.length] = continuationType;
+        System.arraycopy(args, 0, values, 0, args.length);
         values[args.length] = continuation;
         try {
-            Method call = findSuspendMethod(owner.getClass(), name, values, continuation);
-            if (call == null) throw new NoSuchMethodException(owner.getClass().getName() + "." + name);
+            call.setAccessible(true);
             return call.invoke(owner, values);
         } catch (Throwable error) {
             throw unwrap(error);
         }
     }
 
-    private static Method findSuspendMethod(Class<?> type, String name, Object[] values, Object continuation) {
+    private static Method findSuspendMethod(Class<?> type, String name, Object[] args) {
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
             for (Method candidate : current.getDeclaredMethods()) {
                 Class<?>[] parameters = candidate.getParameterTypes();
-                if (!candidate.getName().equals(name) || parameters.length != values.length) continue;
+                if (!candidate.getName().equals(name) || parameters.length != args.length + 1) continue;
+                if (!parameters[parameters.length - 1].getName().equals("kotlin.coroutines.Continuation")) continue;
                 boolean matches = true;
-                for (int i = 0; i < parameters.length; i++) {
-                    Object value = i == parameters.length - 1 ? continuation : values[i];
-                    if (value != null && !box(parameters[i]).isInstance(value)) { matches = false; break; }
+                for (int i = 0; i < args.length; i++) {
+                    if (args[i] != null && !box(parameters[i]).isAssignableFrom(args[i].getClass())) {
+                        matches = false;
+                        break;
+                    }
                 }
-                if (matches) {
-                    try { candidate.setAccessible(true); } catch (Throwable ignored) { }
-                    return candidate;
-                }
+                if (matches) return candidate;
             }
         }
         return null;
@@ -383,7 +397,8 @@ public final class FloatingOtpAssistant {
 
     private static boolean isSuspended(Object value) {
         try {
-            Object suspended = Class.forName("kotlin.coroutines.intrinsics.IntrinsicsKt")
+            ClassLoader loader = value == null ? FloatingOtpAssistant.class.getClassLoader() : value.getClass().getClassLoader();
+            Object suspended = Class.forName("kotlin.coroutines.intrinsics.IntrinsicsKt", true, loader)
                     .getMethod("m54523e").invoke(null);
             return value == suspended;
         } catch (Throwable ignored) { return false; }
@@ -409,6 +424,20 @@ public final class FloatingOtpAssistant {
         return target.getClass().getMethod(method).invoke(target);
     }
 
+    private static String getCurrentEmail(Context context) {
+        try {
+            Class<?> databaseClass = Class.forName("com.tempmail.data.p026db.AppDatabase");
+            Object companion = databaseClass.getField("Companion").get(null);
+            Object database = companion.getClass().getMethod("getInstance", Context.class).invoke(companion, context);
+            Object dao = databaseClass.getMethod("mailboxDao").invoke(database);
+            Object rows = dao.getClass().getMethod("getDefaultMailboxSync").invoke(dao);
+            if (rows instanceof List && !((List<?>) rows).isEmpty()) {
+                return callString(((List<?>) rows).get(0), "getFullEmailAddress");
+            }
+        } catch (Throwable ignored) { }
+        return "";
+    }
+
     private static String callString(Object target, String method) {
         try { Object value = call(target, method); return value == null ? "" : String.valueOf(value); }
         catch (Throwable ignored) { return ""; }
@@ -421,34 +450,52 @@ public final class FloatingOtpAssistant {
 
     private static void paste(Context context, String value, TextView status) {
         if (value == null || value.isEmpty()) { status.setText("Value is not available."); return; }
+        ClipboardManager manager = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+        manager.setPrimaryClip(ClipData.newPlainText("Temp Mail", value));
         boolean pasted = false;
         try {
             if (context instanceof AccessibilityService) {
                 AccessibilityService service = (AccessibilityService) context;
-                AccessibilityNodeInfo root = service.getRootInActiveWindow();
-                AccessibilityNodeInfo target = findFocused(root);
+                AccessibilityNodeInfo target = findFocused(service);
                 if (target != null && target.refresh() && target.isEditable()) {
                     target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
                     target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                    Bundle args = new Bundle();
-                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
-                    pasted = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    pasted = target.performAction(AccessibilityNodeInfo.ACTION_PASTE);
+                    if (!pasted) {
+                        Bundle args = new Bundle();
+                        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+                        pasted = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    }
                 }
             }
         } catch (Throwable ignored) { }
         if (pasted) status.setText("Pasted into the focused field.");
-        else {
-            ClipboardManager manager = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
-            manager.setPrimaryClip(ClipData.newPlainText("Temp Mail", value));
-            status.setText("Copied. Focus the target field and paste.");
-        }
+        else status.setText("Copied. Tap the target field, then paste from the keyboard.");
     }
 
-    private static AccessibilityNodeInfo findFocused(AccessibilityNodeInfo node) {
+    private static AccessibilityNodeInfo findFocused(AccessibilityService service) {
+        AccessibilityNodeInfo root = service.getRootInActiveWindow();
+        AccessibilityNodeInfo found = findFocusedNode(root);
+        if (found != null) return found;
+        try {
+            List<AccessibilityWindowInfo> windows = service.getWindows();
+            for (int pass = 0; pass < 2; pass++) {
+                for (AccessibilityWindowInfo window : windows) {
+                    if (pass == 0 && window.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+                    if (pass == 1 && window.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue;
+                    found = findFocusedNode(window.getRoot());
+                    if (found != null) return found;
+                }
+            }
+        } catch (Throwable ignored) { }
+        return null;
+    }
+
+    private static AccessibilityNodeInfo findFocusedNode(AccessibilityNodeInfo node) {
         if (node == null) return null;
-        if (node.isFocused() && node.isEditable()) return node;
+        if ((node.isFocused() || node.isAccessibilityFocused()) && node.isEditable()) return node;
         for (int i = 0; i < node.getChildCount(); i++) {
-            AccessibilityNodeInfo found = findFocused(node.getChild(i));
+            AccessibilityNodeInfo found = findFocusedNode(node.getChild(i));
             if (found != null) return found;
         }
         return null;
