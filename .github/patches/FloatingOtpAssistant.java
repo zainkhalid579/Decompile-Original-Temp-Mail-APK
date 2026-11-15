@@ -1,6 +1,7 @@
 package com.tempmail.data.services;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.Context;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.graphics.Color;
@@ -37,7 +38,9 @@ public final class FloatingOtpAssistant {
 
     private FloatingOtpAssistant() { }
 
-    public static void attach(AccessibilityService service, View overlay) {
+    public static void attach(Context context, View overlay) {
+        if (!(context instanceof AccessibilityService)) return;
+        AccessibilityService service = (AccessibilityService) context;
         if (!(overlay instanceof RelativeLayout)) return;
         RelativeLayout root = (RelativeLayout) overlay;
         int textId = resourceId("id", "text");
