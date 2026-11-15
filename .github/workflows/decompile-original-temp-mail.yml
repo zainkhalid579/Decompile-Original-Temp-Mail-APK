@@ -1,0 +1,65 @@
+name: Decompile Original Temp Mail APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'com.tempmail-4.09.apk'
+      - '.github/workflows/decompile-original.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Check original APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f com.tempmail-4.09.apk || {
+            echo 'Upload com.tempmail-4.09.apk to the repository root first.'
+            exit 1
+          }
+          unzip -t com.tempmail-4.09.apk >/dev/null
+          mkdir -p tools output
+
+      - name: Download JADX
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip \
+            -o tools/jadx.zip
+          unzip -q tools/jadx.zip -d tools/jadx
+          chmod +x tools/jadx/bin/jadx
+
+      - name: Decompile APK to Java sources and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/jadx/bin/jadx \
+            --show-bad-code \
+            --deobf \
+            --export-gradle \
+            --export-gradle-type android-app \
+            -d output/temp-mail-decompiled \
+            com.tempmail-4.09.apk
+
+      - name: Upload decompiled project
+        uses: actions/upload-artifact@v4
+        with:
+          name: TempMail-4.09-decompiled-source
+          path: output/temp-mail-decompiled
+          if-no-files-found: error
+          retention-days: 7
