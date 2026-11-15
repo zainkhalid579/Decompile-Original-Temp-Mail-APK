@@ -74,7 +74,11 @@ if not activity_patched:
     raise SystemExit("Could not add the Floating OTP toggle after MainActivity.setContentView")
 
 manifest = decoded / "AndroidManifest.xml"
-manifest_text = manifest.read_text(encoding="utf-8")
+manifest_bytes = manifest.read_bytes()
+manifest_source = manifest
+if not manifest_bytes.lstrip().startswith(b"<"):
+    manifest_source = decoded.parent / "temp-mail-manifest" / "AndroidManifest.xml"
+manifest_text = manifest_source.read_text(encoding="utf-8")
 overlay_permission = '<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />'
 if overlay_permission not in manifest_text:
     manifest_text = re.sub(r"(<manifest\b[^>]*>)", r"\1\n    " + overlay_permission, manifest_text, count=1)
