@@ -18,5 +18,11 @@ if hook.strip() not in text:
 
 helper_target.parent.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(helper_source, helper_target)
+
+# JADX exports these decoded nine-patches as plain PNGs. Rename the affected
+# AndroidX divider to a regular bitmap so AAPT can compile the reconstructed project.
+for image in (root / "app/src/main/res").glob("drawable*/abc_list_divider_mtrl_alpha.9.png"):
+    image.rename(image.with_name("abc_list_divider_mtrl_alpha.png"))
+
 print("Attached OTP controls to the original Temp Mail autofill overlay.")
 
