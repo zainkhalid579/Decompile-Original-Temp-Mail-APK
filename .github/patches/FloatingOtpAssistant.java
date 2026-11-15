@@ -41,6 +41,7 @@ public final class FloatingOtpAssistant {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static WindowManager activeWindowManager;
     private static View activeFloatingView;
+    private static View activeFloatingPanel;
     private static AccessibilityService accessibilityService;
     private static TextView currentAddressView;
     private static final Pattern OTP = Pattern.compile(
@@ -84,13 +85,27 @@ public final class FloatingOtpAssistant {
 
     private static void showFloating(AccessibilityService service) {
         RelativeLayout root = new RelativeLayout(service);
-        root.setBackgroundColor(Color.WHITE);
+        root.setBackgroundColor(Color.TRANSPARENT);
         activeFloatingView = root;
+        Button launcher = button(service, "OTP");
+        launcher.setId(View.generateViewId());
+        launcher.setTag("tempmail-floating-launcher");
+        launcher.setContentDescription("Show or hide Temp Mail assistant");
+        launcher.setMinWidth(dp(service, 52));
+        launcher.setMinHeight(dp(service, 46));
+        RelativeLayout.LayoutParams launcherParams = new RelativeLayout.LayoutParams(dp(service, 56), dp(service, 46));
+        launcherParams.addRule(RelativeLayout.ALIGN_PARENT_END);
+        root.addView(launcher, launcherParams);
+        launcher.setOnClickListener(v -> {
+            View panel = activeFloatingPanel;
+            if (panel != null) panel.setVisibility(panel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+        });
         attach(service, root);
         WindowManager manager = (WindowManager) service.getSystemService(Context.WINDOW_SERVICE);
         int type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(dp(service, 184), -2, type,
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, android.graphics.PixelFormat.TRANSLUCENT);
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                android.graphics.PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
         params.x = dp(service, 8);
         manager.addView(root, params);
@@ -101,6 +116,7 @@ public final class FloatingOtpAssistant {
         try { if (activeWindowManager != null && activeFloatingView != null) activeWindowManager.removeView(activeFloatingView); }
         catch (Throwable ignored) { }
         activeFloatingView = null;
+        activeFloatingPanel = null;
         activeWindowManager = null;
     }
 
@@ -125,7 +141,17 @@ public final class FloatingOtpAssistant {
         panel.setPadding(dp(context, 8), dp(context, 5), dp(context, 8), dp(context, 8));
         panel.setBackgroundColor(Color.WHITE);
         RelativeLayout.LayoutParams panelParams = new RelativeLayout.LayoutParams(-1, -2);
-        if (textId != 0) panelParams.addRule(RelativeLayout.BELOW, textId);
+        if (overlay == activeFloatingView) {
+            View launcher = root.findViewWithTag("tempmail-floating-launcher");
+            if (launcher != null) {
+                panelParams.addRule(RelativeLayout.BELOW, launcher.getId());
+                panelParams.topMargin = dp(context, 4);
+            }
+            panel.setVisibility(View.GONE);
+            activeFloatingPanel = panel;
+        } else if (textId != 0) {
+            panelParams.addRule(RelativeLayout.BELOW, textId);
+        }
         root.addView(panel, panelParams);
 
         TextView status = new TextView(context);
@@ -134,9 +160,9 @@ public final class FloatingOtpAssistant {
         status.setTextColor(Color.DKGRAY);
         panel.addView(status, new LinearLayout.LayoutParams(-1, -2));
         if (overlay == activeFloatingView) {
-            Button close = button(context, "Close floating assistant");
+            Button close = button(context, "Hide options");
             panel.addView(close, new LinearLayout.LayoutParams(-1, -2));
-            close.setOnClickListener(v -> removeFloating());
+            close.setOnClickListener(v -> panel.setVisibility(View.GONE));
         }
 
         Button change = button(context, "Change email");
@@ -407,7 +433,6 @@ public final class FloatingOtpAssistant {
                     Bundle args = new Bundle();
                     args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
                     pasted = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-                    if (pasted) target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 }
             }
         } catch (Throwable ignored) { }
