@@ -53,6 +53,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          set +e
           tools/jadx/bin/jadx --show-bad-code --deobf --export-gradle \
             --export-gradle-type android-app -d work/temp-mail-decompiled com.tempmail-4.09.apk
           jadx_status=$?
