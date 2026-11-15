@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 import sys
+import re
 
 root = Path(sys.argv[1])
 service = root / "app/src/main/java/com/tempmail/data/services/AutoFillAccessibilityService.java"
@@ -23,6 +24,12 @@ shutil.copyfile(helper_source, helper_target)
 # AndroidX divider to a regular bitmap so AAPT can compile the reconstructed project.
 for image in (root / "app/src/main/res").glob("**/*.9.png"):
     image.rename(image.with_name(image.name[:-6] + ".png"))
+
+colors = root / "app/src/main/res/values/colors.xml"
+if colors.exists():
+    values = colors.read_text(encoding="utf-8")
+    values = re.sub(r'(<color\b[^>]*>)\s*0\s*(</color>)', r'\1#00000000\2', values)
+    colors.write_text(values, encoding="utf-8")
 
 print("Attached OTP controls to the original Temp Mail autofill overlay.")
 
