@@ -6,44 +6,9 @@ import zipfile
 decoded = Path(sys.argv[1])
 helper_dex = Path(sys.argv[2])
 
-matches = list(decoded.glob("smali*/com/tempmail/data/services/AutoFillAccessibilityService.smali"))
-if not matches:
+services = list(decoded.glob("smali*/com/tempmail/data/services/AutoFillAccessibilityService.smali"))
+if not services:
     raise SystemExit("AutoFillAccessibilityService smali was not found")
-
-hook = "invoke-static {p0, ROOT}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach(Landroid/content/Context;Landroid/view/View;)V"
-patched = False
-for file in matches:
-    text = file.read_text(encoding="utf-8")
-    for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
-        method = declaration.group(0)
-        if "->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V" not in method:
-            continue
-        if "FloatingOtpAssistant;->attach" in method:
-            patched = True
-            break
-        add = re.search(r"invoke-(?:virtual|interface)\s+\{([^}]+)\},\s*Landroid/view/(?:WindowManager|ViewManager);->addView\(Landroid/view/View;", method)
-        if not add:
-            continue
-        registers = [part.strip() for part in add.group(1).split(",")]
-        if len(registers) < 3:
-            continue
-        root_register = registers[1]
-        measure = re.search(rf"(?m)^\s*invoke-virtual\s+\{{{re.escape(root_register)},[^}}]*\}},\s*Landroid/view/View;->measure\(II\)V\s*$", method)
-        insertion = declaration.start() + (measure.start() if measure else add.start())
-        text = text[:insertion] + "    " + hook.replace("ROOT", root_register) + "\n" + text[insertion:]
-        file.write_text(text, encoding="utf-8")
-        patched = True
-        break
-    if patched:
-        break
-
-if not patched:
-    for file in matches:
-        print(f"Overlay bytecode candidate: {file}")
-        for line_number, line in enumerate(file.read_text(encoding="utf-8").splitlines(), 1):
-            if "addView" in line or "WindowManager" in line:
-                print(f"{line_number}: {line.strip()}")
-    raise SystemExit("Could not patch the existing windowed autofill overlay")
 
 # Add a visible in-app toggle after MainActivity installs its content view. This
 # makes the assistant discoverable without waiting for an autofill event.
@@ -51,14 +16,14 @@ activities = list(decoded.glob("smali*/com/tempmail/MainActivity.smali"))
 if not activities:
     raise SystemExit("MainActivity smali was not found")
 activity_patched = False
-activity_hook = "invoke-static {p0}, Lcom/tempmail/data/services/FloatingOtpAssistant;->installInApp(Landroid/content/Context;)V"
+activity_hook = "invoke-static {p0, p0}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach(Landroid/content/Context;Ljava/lang/Object;)V"
 for file in activities:
     text = file.read_text(encoding="utf-8")
     for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
         method = declaration.group(0)
         if "onCreate(Landroid/os/Bundle;)V" not in method:
             continue
-        if "FloatingOtpAssistant;->installInApp" in method:
+        if "FloatingOtpAssistant;->attach" in method:
             activity_patched = True
             break
         content = re.search(r"(?m)^\s*invoke-virtual\s+\{p0,[^}]+\},\s*L[^;]+;->setContentView\(Landroid/view/View;\)V\s*$", method)
@@ -73,16 +38,15 @@ for file in activities:
 if not activity_patched:
     raise SystemExit("Could not add the Floating OTP toggle after MainActivity.setContentView")
 
-services = list(decoded.glob("smali*/com/tempmail/data/services/AutoFillAccessibilityService.smali"))
 service_patched = False
-service_hook = "invoke-static {p0}, Lcom/tempmail/data/services/FloatingOtpAssistant;->setAccessibilityService(Landroid/accessibilityservice/AccessibilityService;)V"
+service_hook = "invoke-static {p0, p1}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach(Landroid/content/Context;Ljava/lang/Object;)V"
 for file in services:
     text = file.read_text(encoding="utf-8")
     for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
         method = declaration.group(0)
         if "onAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V" not in method:
             continue
-        if "FloatingOtpAssistant;->setAccessibilityService" in method:
+        if "invoke-static {p0, p1}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach" in method:
             service_patched = True
             break
         offset = 0
