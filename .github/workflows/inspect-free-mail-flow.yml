@@ -1,0 +1,62 @@
+name: Inspect decompiled Temp Mail mailbox flow
+
+on:
+  push:
+    paths:
+      - '.github/workflows/inspect-free-mail-flow.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download successful JADX output
+        uses: actions/download-artifact@v4
+        with:
+          name: TempMail-4.09-decompiled-source
+          path: decompiled
+          repository: ${{ github.repository }}
+          run-id: 43702760031
+          github-token: ${{ github.token }}
+      - name: Index mailbox, API, and model code
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("decompiled")
+          files = list(root.rglob("*.java"))
+          name_re = re.compile(r"(api|service|email|mail|inbox|message|token|retrofit|network|home|auth|pref|account)", re.I)
+          print(f"JAVA_SOURCE_COUNT={len(files)}")
+          print("=== NAME MATCHES ===")
+          named = [p for p in files if name_re.search(p.name)]
+          print("\n".join(str(p) for p in named[:250]))
+
+          patterns = [
+              ("API DECLARATIONS", re.compile(r"@(GET|POST|PUT|DELETE|PATCH|Headers|FormUrlEncoded|Multipart|Query|Path|Body|Field)\\b")),
+              ("STORAGE/AUTH", re.compile(r"SharedPreferences|DataStore|Authorization|Bearer|access.?token|auth.?token|token", re.I)),
+              ("MAILBOX/INBOX", re.compile(r"mailbox|inbox|messages?|email.?address|create.?email|refresh", re.I)),
+              ("MODEL FIELDS", re.compile(r"@SerializedName|@Json(name|Property)|@Expose|class .*?(Response|Request|Model|Dto)", re.I)),
+          ]
+          for title, pat in patterns:
+              print(f"=== {title} ===")
+              hits = []
+              for p in files:
+                  lines = p.read_text(errors="replace").splitlines()
+                  for i, line in enumerate(lines):
+                      if pat.search(line):
+                          hits.append((p, i, lines))
+              print(f"MATCHES={len(hits)}")
+              # Prioritize likely first-party feature code, then report up to 160 contexts.
+              hits.sort(key=lambda x: (0 if name_re.search(x[0].name) else 1, str(x[0]), x[1]))
+              for p, i, lines in hits[:160]:
+                  print(f"--- {p}:{i+1} ---")
+                  lo, hi = max(0, i-2), min(len(lines), i+4)
+                  for n in range(lo, hi):
+                      print(f"{n+1}: {lines[n]}")
+          PY
