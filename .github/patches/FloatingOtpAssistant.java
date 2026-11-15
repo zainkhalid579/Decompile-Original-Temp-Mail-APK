@@ -259,46 +259,54 @@ public final class FloatingOtpAssistant {
     private static void loadLatest(Context context, TextView status, Button pasteOtp) {
         try {
             Object inbox = construct("com.tempmail.data.repository.InboxRepository", context);
-            suspendCall(inbox, "m48342I", new Object[0], value -> {
-                if (!(value instanceof List)) {
-                    status.setText("Inbox list is unavailable.");
+            suspendCall(inbox, "m48342I", new Object[0],
+                    value -> processLatest(context, status, pasteOtp, value),
+                    error -> status.setText("Inbox list failed: " + safe(error)));
+        } catch (Throwable error) {
+            status.setText("Inbox list failed: " + safe(error));
+        }
+    }
+
+    private static void processLatest(Context context, TextView status, Button pasteOtp, Object value) {
+        try {
+            if (!(value instanceof List)) {
+                status.setText("Inbox list is unavailable.");
+                return;
+            }
+            Object latest = null;
+            long newest = Long.MIN_VALUE;
+            for (Object email : new ArrayList<>((List<?>) value)) {
+                Object timestamp = call(email, "getTimestampMs");
+                if (timestamp instanceof Number && ((Number) timestamp).longValue() > newest) {
+                    newest = ((Number) timestamp).longValue();
+                    latest = email;
+                }
+            }
+            if (latest == null) {
+                status.setText("No messages in this mailbox yet.");
+                return;
+            }
+            Object id = call(latest, "getEid");
+            Object mailRepository = construct("com.tempmail.data.repository.MailRepository", context);
+            suspendCall(mailRepository, "m48374C", new Object[]{String.valueOf(id)}, result -> {
+                Object mail = payload(result);
+                if (mail == null) {
+                    status.setText("Inbox refreshed; latest message details are unavailable.");
                     return;
                 }
-                Object latest = null;
-                long newest = Long.MIN_VALUE;
-                for (Object email : new ArrayList<>((List<?>) value)) {
-                    Object timestamp = call(email, "getTimestampMs");
-                    if (timestamp instanceof Number && ((Number) timestamp).longValue() > newest) {
-                        newest = ((Number) timestamp).longValue();
-                        latest = email;
-                    }
+                String content = plain(callString(mail, "getMailSubject")) + "\n"
+                        + plain(callString(mail, "getPreview")) + "\n"
+                        + plain(callString(mail, "getMailHtml"));
+                Matcher matcher = OTP.matcher(content);
+                if (matcher.find()) {
+                    String code = matcher.group(1);
+                    pasteOtp.setTag(code);
+                    pasteOtp.setEnabled(true);
+                    status.setText("OTP found in: " + safe(callString(mail, "getMailSubject")));
+                } else {
+                    status.setText("Inbox refreshed. No verification code found in the latest message.");
                 }
-                if (latest == null) {
-                    status.setText("No messages in this mailbox yet.");
-                    return;
-                }
-                Object id = call(latest, "getEid");
-                Object mailRepository = construct("com.tempmail.data.repository.MailRepository", context);
-                suspendCall(mailRepository, "m48374C", new Object[]{String.valueOf(id)}, result -> {
-                    Object mail = payload(result);
-                    if (mail == null) {
-                        status.setText("Inbox refreshed; latest message details are unavailable.");
-                        return;
-                    }
-                    String content = plain(callString(mail, "getMailSubject")) + "\n"
-                            + plain(callString(mail, "getPreview")) + "\n"
-                            + plain(callString(mail, "getMailHtml"));
-                    Matcher matcher = OTP.matcher(content);
-                    if (matcher.find()) {
-                        String code = matcher.group(1);
-                        pasteOtp.setTag(code);
-                        pasteOtp.setEnabled(true);
-                        status.setText("OTP found in: " + safe(callString(mail, "getMailSubject")));
-                    } else {
-                        status.setText("Inbox refreshed. No verification code found in the latest message.");
-                    }
-                }, error -> status.setText("Message read failed: " + safe(error)));
-            }, error -> status.setText("Inbox list failed: " + safe(error)));
+            }, error -> status.setText("Message read failed: " + safe(error)));
         } catch (Throwable error) {
             status.setText("Inbox list failed: " + safe(error));
         }
