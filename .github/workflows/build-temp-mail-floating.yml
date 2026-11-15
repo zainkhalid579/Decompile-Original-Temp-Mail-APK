@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - '.github/workflows/build-temp-mail-floating.yml'
+      - '.github/patches/**'
 
 permissions:
   contents: read
