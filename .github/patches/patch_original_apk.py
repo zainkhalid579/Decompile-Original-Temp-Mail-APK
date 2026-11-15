@@ -6,38 +6,39 @@ import zipfile
 decoded = Path(sys.argv[1])
 helper_dex = Path(sys.argv[2])
 
-matches = list(decoded.glob("smali*/com/tempmail/utils/AccessibilityHelpers.smali"))
+matches = list(decoded.glob("smali*/com/tempmail/data/services/AutoFillAccessibilityService.smali"))
 if not matches:
-    raise SystemExit("AccessibilityHelpers smali was not found")
+    raise SystemExit("AutoFillAccessibilityService smali was not found")
 
-layout_id = "0x7f0d001c"  # accessiblity_autofill from the original APK resources
-hook = "invoke-static {p0, p1, ROOT}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach(Landroid/content/Context;Ljava/lang/String;Landroid/view/View;)V"
+hook = "invoke-static {p0, ROOT}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach(Landroid/content/Context;Landroid/view/View;)V"
 patched = False
 for file in matches:
     text = file.read_text(encoding="utf-8")
-    const = re.search(rf"(?m)^\s*const(?:/[^\s]+)?\s+(v\d+), {layout_id}\s*$", text)
-    if not const:
-        continue
-    method_start = text.rfind(".method ", 0, const.start())
-    method_end = text.find(".end method", const.end())
-    if method_start < 0 or method_end < 0:
-        continue
-    method = text[method_start:method_end]
-    if "FloatingOtpAssistant;->attach" in method:
+    for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
+        method = declaration.group(0)
+        if "Landroid/view/WindowManager;->addView(Landroid/view/View;" not in method:
+            continue
+        if "FloatingOtpAssistant;->attach" in method:
+            patched = True
+            break
+        add = re.search(r"invoke-virtual\s+\{([^}]+)\},\s*Landroid/view/WindowManager;->addView\(Landroid/view/View;", method)
+        if not add:
+            continue
+        registers = [part.strip() for part in add.group(1).split(",")]
+        if len(registers) < 3:
+            continue
+        root_register = registers[1]
+        measure = re.search(rf"(?m)^\s*invoke-virtual\s+\{{{re.escape(root_register)},[^}}]*\}},\s*Landroid/view/View;->measure\(II\)V\s*$", method)
+        insertion = declaration.start() + (measure.start() if measure else add.start())
+        text = text[:insertion] + "    " + hook.replace("ROOT", root_register) + "\n" + text[insertion:]
+        file.write_text(text, encoding="utf-8")
         patched = True
         break
-    result = re.search(rf"move-result-object {const.group(1)}\s*\n\s*check-cast {const.group(1)}, Landroid/widget/RelativeLayout;", method)
-    if not result:
-        continue
-    root_register = const.group(1)
-    insert_at = method_start + result.end()
-    text = text[:insert_at] + "\n    " + hook.replace("ROOT", root_register) + text[insert_at:]
-    file.write_text(text, encoding="utf-8")
-    patched = True
-    break
+    if patched:
+        break
 
 if not patched:
-    raise SystemExit("Could not patch the original autofill overlay inflation point")
+    raise SystemExit("Could not patch the existing windowed autofill overlay")
 
 # APKTool rebuilds the original dex files. Add the helper DEX as a new multidex entry.
 apk = decoded.parent / "temp-mail-unsigned.apk"
