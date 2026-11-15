@@ -38,6 +38,11 @@ for file in matches:
         break
 
 if not patched:
+    for file in matches:
+        print(f"Overlay bytecode candidate: {file}")
+        for line_number, line in enumerate(file.read_text(encoding="utf-8").splitlines(), 1):
+            if "addView" in line or "WindowManager" in line:
+                print(f"{line_number}: {line.strip()}")
     raise SystemExit("Could not patch the existing windowed autofill overlay")
 
 # APKTool rebuilds the original dex files. Add the helper DEX as a new multidex entry.
