@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - '.github/trigger-floating-build'
+      - '.github/workflows/build-temp-mail-floating.yml'
 
 permissions:
   contents: read
