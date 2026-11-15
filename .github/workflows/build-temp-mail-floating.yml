@@ -44,6 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p tools/jadx
           curl -fL --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip -o jadx.zip
           unzip -q jadx.zip -d tools/jadx
           chmod +x tools/jadx/bin/jadx
