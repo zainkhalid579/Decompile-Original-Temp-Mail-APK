@@ -80,22 +80,27 @@ for file in services:
     text = file.read_text(encoding="utf-8")
     for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
         method = declaration.group(0)
-        if "onCreate()V" not in method:
+        if "onAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V" not in method:
             continue
         if "FloatingOtpAssistant;->setAccessibilityService" in method:
             service_patched = True
             break
-        super_call = re.search(r"(?m)^\s*invoke-super\s+\{p0\},\s*Landroid/accessibilityservice/AccessibilityService;->onCreate\(\)V\s*$", method)
-        if super_call:
-            insertion = declaration.start() + super_call.end()
-            text = text[:insertion] + "\n    " + service_hook + text[insertion:]
-            file.write_text(text, encoding="utf-8")
-            service_patched = True
+        offset = 0
+        for line in method.splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped and not stripped.startswith((".", ":", "#")):
+                insertion = declaration.start() + offset
+                text = text[:insertion] + "    " + service_hook + "\n" + text[insertion:]
+                file.write_text(text, encoding="utf-8")
+                service_patched = True
+                break
+            offset += len(line)
+        if service_patched:
             break
     if service_patched:
         break
 if not service_patched:
-    raise SystemExit("Could not register the Temp Mail accessibility service instance")
+    raise SystemExit("Could not register the Temp Mail accessibility service from onAccessibilityEvent")
 
 # APKTool rebuilds the original dex files. Add the helper DEX as a new multidex entry.
 apk = decoded.parent / "temp-mail-unsigned.apk"
