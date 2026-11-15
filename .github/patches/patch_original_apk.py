@@ -6,41 +6,38 @@ import zipfile
 decoded = Path(sys.argv[1])
 helper_dex = Path(sys.argv[2])
 
-matches = list(decoded.glob("smali*/com/tempmail/data/services/AutoFillAccessibilityService.smali"))
+matches = list(decoded.glob("smali*/com/tempmail/utils/AccessibilityHelpers.smali"))
 if not matches:
-    raise SystemExit("AutoFillAccessibilityService smali was not found")
+    raise SystemExit("AccessibilityHelpers smali was not found")
 
-hook = "invoke-static {p0, ROOT}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach(Landroid/accessibilityservice/AccessibilityService;Landroid/view/View;)V"
+layout_id = "0x7f0d001c"  # accessiblity_autofill from the original APK resources
+hook = "invoke-static {p0, p1, ROOT}, Lcom/tempmail/data/services/FloatingOtpAssistant;->attach(Landroid/content/Context;Ljava/lang/String;Landroid/view/View;)V"
 patched = False
 for file in matches:
     text = file.read_text(encoding="utf-8")
-    declaration = re.search(r"(?m)^\.method [^\n]*\bm48461w\([^\n]*$", text)
-    if not declaration:
+    const = re.search(rf"(?m)^\s*const(?:/[^\s]+)?\s+(v\d+), {layout_id}\s*$", text)
+    if not const:
         continue
-    start = declaration.start()
-    end = text.find(".end method", start)
-    if end < 0:
+    method_start = text.rfind(".method ", 0, const.start())
+    method_end = text.find(".end method", const.end())
+    if method_start < 0 or method_end < 0:
         continue
-    method = text[start:end]
+    method = text[method_start:method_end]
     if "FloatingOtpAssistant;->attach" in method:
         patched = True
         break
-    invoke = method.find("->m49870j(")
-    if invoke < 0:
-        continue
-    result = re.search(r"\n\s*move-result-object (v\d+)", method[invoke:])
+    result = re.search(rf"move-result-object {const.group(1)}\s*\n\s*check-cast {const.group(1)}, Landroid/widget/RelativeLayout;", method)
     if not result:
         continue
-    root_register = result.group(1)
-    insert_at = invoke + result.end()
-    patched_method = method[:insert_at] + "\n    " + hook.replace("ROOT", root_register) + method[insert_at:]
-    text = text[:start] + patched_method + text[end:]
+    root_register = const.group(1)
+    insert_at = method_start + result.end()
+    text = text[:insert_at] + "\n    " + hook.replace("ROOT", root_register) + text[insert_at:]
     file.write_text(text, encoding="utf-8")
     patched = True
     break
 
 if not patched:
-    raise SystemExit("Could not patch the existing autofill overlay method")
+    raise SystemExit("Could not patch the original autofill overlay inflation point")
 
 # APKTool rebuilds the original dex files. Add the helper DEX as a new multidex entry.
 apk = decoded.parent / "temp-mail-unsigned.apk"
