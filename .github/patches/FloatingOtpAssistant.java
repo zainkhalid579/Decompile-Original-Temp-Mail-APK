@@ -188,12 +188,12 @@ public final class FloatingOtpAssistant {
         }
 
         pasteEmail.setOnClickListener(v -> {
-            status.setText("Loading the current Temp Mail address…");
+            status.setText("Reading the current Temp Mail address…");
             IO.execute(() -> {
                 String email = getCurrentEmail(context);
                 MAIN.post(() -> {
                     if (email != null && email.startsWith("ERROR:")) status.setText("Mailbox lookup failed: " + email.substring(6));
-                    else if (email == null || email.isEmpty()) status.setText("Current mailbox address is unavailable.");
+                    else if (email == null || email.isEmpty()) status.setText("Open Temp Mail and create/select a mailbox first.");
                     else paste(context, email, status);
                 });
             });
@@ -202,111 +202,112 @@ public final class FloatingOtpAssistant {
             Object code = pasteOtp.getTag();
             if (code instanceof String) paste(context, (String) code, status);
         });
+        change.setText("Change email in Temp Mail");
         change.setOnClickListener(v -> {
-            change.setEnabled(false);
-            status.setText("Creating a new mailbox…");
             try {
-                Object repository = construct("com.tempmail.data.repository.MailboxRepository", context);
-                suspendCall(repository, "m48413u", new Object[0], result -> {
-                    change.setEnabled(true);
-                    Object mailbox = payload(result);
-                    String next = callString(mailbox, "getFullEmailAddress");
-                    if (next == null || next.isEmpty()) {
-                        status.setText("Mailbox change failed. Try again.");
-                        return;
-                    }
-                    if (mailboxAddress != null) mailboxAddress.setText(next);
-                    pasteOtp.setTag(null);
-                    pasteOtp.setEnabled(false);
-                    status.setText("Mailbox changed. Refresh to check messages.");
-                }, error -> {
-                    change.setEnabled(true);
-                    status.setText("Mailbox change failed: " + safe(error));
-                });
+                Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+                if (launch == null) {
+                    status.setText("Temp Mail screen could not be opened.");
+                    return;
+                }
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                context.startActivity(launch);
+                status.setText("Change the mailbox in Temp Mail, then return here.");
             } catch (Throwable error) {
-                change.setEnabled(true);
-                status.setText("Mailbox change failed: " + safe(error));
+                status.setText("Could not open Temp Mail: " + safe(error));
             }
         });
+        refresh.setText("Check inbox");
         refresh.setOnClickListener(v -> {
             refresh.setEnabled(false);
             pasteOtp.setTag(null);
             pasteOtp.setEnabled(false);
-            status.setText("Refreshing the Temp Mail inbox…");
-            try {
-                Object repository = construct("com.tempmail.data.repository.InboxRepository", context);
-                suspendCall(repository, "m48347N", new Object[0], result -> {
+            status.setText("Checking messages saved by Temp Mail…");
+            IO.execute(() -> {
+                String result = readLatestFromDatabase(context);
+                MAIN.post(() -> {
                     refresh.setEnabled(true);
-                    if (!isSuccess(result)) {
-                        status.setText("Inbox refresh failed. Try again.");
+                    if (result.startsWith("ERROR:")) {
+                        status.setText("Inbox lookup failed: " + result.substring(6));
                         return;
                     }
-                    loadLatest(context, status, pasteOtp);
-                }, error -> {
-                    refresh.setEnabled(true);
-                    status.setText("Inbox refresh failed: " + safe(error));
+                    int split = result.indexOf('|');
+                    if (split < 0) {
+                        status.setText("No saved messages found. Open Temp Mail and refresh its inbox.");
+                        return;
+                    }
+                    String subject = result.substring(0, split);
+                    String code = result.substring(split + 1);
+                    if (!code.isEmpty()) {
+                        pasteOtp.setTag(code);
+                        pasteOtp.setEnabled(true);
+                        status.setText("OTP found in saved message: " + (subject.isEmpty() ? "(no subject)" : subject));
+                    } else {
+                        status.setText("Inbox checked. No OTP found in saved messages.");
+                    }
                 });
-            } catch (Throwable error) {
-                refresh.setEnabled(true);
-                status.setText("Inbox refresh failed: " + safe(error));
-            }
+            });
         });
     }
 
-    private static void loadLatest(Context context, TextView status, Button pasteOtp) {
+    private static String getCurrentEmail(Context context) {
+        android.database.sqlite.SQLiteDatabase db = null;
+        android.database.Cursor cursor = null;
         try {
-            Object inbox = construct("com.tempmail.data.repository.InboxRepository", context);
-            suspendCall(inbox, "m48342I", new Object[0],
-                    value -> processLatest(context, status, pasteOtp, value),
-                    error -> status.setText("Inbox list failed: " + safe(error)));
+            db = openMailboxDatabase(context);
+            cursor = db.rawQuery("SELECT fullEmailAddress FROM MailboxTable WHERE isDefault = 1 ORDER BY startTime DESC LIMIT 1", null);
+            return cursor.moveToFirst() ? cursor.getString(0) : "";
         } catch (Throwable error) {
-            status.setText("Inbox list failed: " + safe(error));
+            return "ERROR:" + safe(unwrap(error));
+        } finally {
+            if (cursor != null) cursor.close();
+            if (db != null) db.close();
         }
     }
 
-    private static void processLatest(Context context, TextView status, Button pasteOtp, Object value) {
+    private static String readLatestFromDatabase(Context context) {
+        android.database.sqlite.SQLiteDatabase db = null;
+        android.database.Cursor cursor = null;
         try {
-            if (!(value instanceof List)) {
-                status.setText("Inbox list is unavailable.");
-                return;
+            db = openMailboxDatabase(context);
+            cursor = db.rawQuery("SELECT e.eid, e.subject, e.preview FROM EmailTable e JOIN MailboxTable m ON m.fullEmailAddress = e.emailAddress WHERE m.isDefault = 1 AND e.isDeleted = 0 ORDER BY e.timestampMs DESC LIMIT 20", null);
+            while (cursor.moveToNext()) {
+                String eid = cursor.getString(0);
+                String subject = cursor.isNull(1) ? "" : cursor.getString(1);
+                StringBuilder content = new StringBuilder(subject).append('\n');
+                if (!cursor.isNull(2)) content.append(cursor.getString(2)).append('\n');
+                appendMailBody(db, "MailHtmlTable", eid, content);
+                appendMailBody(db, "MailTextTable", eid, content);
+                appendMailBody(db, "MailTextOnlyTable", eid, content);
+                Matcher matcher = OTP.matcher(plain(content.toString()));
+                if (matcher.find()) return subject + "|" + matcher.group(1);
             }
-            Object latest = null;
-            long newest = Long.MIN_VALUE;
-            for (Object email : new ArrayList<>((List<?>) value)) {
-                Object timestamp = call(email, "getTimestampMs");
-                if (timestamp instanceof Number && ((Number) timestamp).longValue() > newest) {
-                    newest = ((Number) timestamp).longValue();
-                    latest = email;
-                }
-            }
-            if (latest == null) {
-                status.setText("No messages in this mailbox yet.");
-                return;
-            }
-            Object id = call(latest, "getEid");
-            Object mailRepository = construct("com.tempmail.data.repository.MailRepository", context);
-            suspendCall(mailRepository, "m48374C", new Object[]{String.valueOf(id)}, result -> {
-                Object mail = payload(result);
-                if (mail == null) {
-                    status.setText("Inbox refreshed; latest message details are unavailable.");
-                    return;
-                }
-                String content = plain(callString(mail, "getMailSubject")) + "\n"
-                        + plain(callString(mail, "getPreview")) + "\n"
-                        + plain(callString(mail, "getMailHtml"));
-                Matcher matcher = OTP.matcher(content);
-                if (matcher.find()) {
-                    String code = matcher.group(1);
-                    pasteOtp.setTag(code);
-                    pasteOtp.setEnabled(true);
-                    status.setText("OTP found in: " + safe(callString(mail, "getMailSubject")));
-                } else {
-                    status.setText("Inbox refreshed. No verification code found in the latest message.");
-                }
-            }, error -> status.setText("Message read failed: " + safe(error)));
+            return "|";
         } catch (Throwable error) {
-            status.setText("Inbox list failed: " + safe(error));
+            return "ERROR:" + safe(unwrap(error));
+        } finally {
+            if (cursor != null) cursor.close();
+            if (db != null) db.close();
         }
+    }
+
+    private static void appendMailBody(android.database.sqlite.SQLiteDatabase db, String table, String eid, StringBuilder out) {
+        android.database.Cursor body = null;
+        try {
+            body = db.rawQuery("SELECT text FROM " + table + " WHERE eid = ?", new String[]{eid});
+            while (body.moveToNext()) if (!body.isNull(0)) out.append('\n').append(body.getString(0));
+        } catch (Throwable ignored) {
+            // Some messages have only one of the app's HTML/text representations.
+        } finally {
+            if (body != null) body.close();
+        }
+    }
+
+    private static android.database.sqlite.SQLiteDatabase openMailboxDatabase(Context context) {
+        int id = context.getResources().getIdentifier("db_name", "string", context.getPackageName());
+        if (id == 0) throw new IllegalStateException("Temp Mail database name resource is missing");
+        String path = context.getDatabasePath(context.getString(id) + ".db").getAbsolutePath();
+        return android.database.sqlite.SQLiteDatabase.openDatabase(path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY);
     }
 
     private static void suspendCall(Object owner, String method, Object[] args,
@@ -447,21 +448,6 @@ public final class FloatingOtpAssistant {
     private static Object call(Object target, String method) throws Exception {
         if (target == null) return null;
         return target.getClass().getMethod(method).invoke(target);
-    }
-
-    private static String getCurrentEmail(Context context) {
-        try {
-            Class<?> databaseClass = Class.forName("com.tempmail.data.p026db.AppDatabase");
-            Object database = databaseClass.getMethod("getInstance", Context.class).invoke(null, context);
-            Object dao = databaseClass.getMethod("mailboxDao").invoke(database);
-            Object rows = dao.getClass().getMethod("getDefaultMailboxSync").invoke(dao);
-            if (rows instanceof List && !((List<?>) rows).isEmpty()) {
-                return callString(((List<?>) rows).get(0), "getFullEmailAddress");
-            }
-        } catch (Throwable error) {
-            return "ERROR:" + safe(unwrap(error));
-        }
-        return "";
     }
 
     private static String callString(Object target, String method) {
