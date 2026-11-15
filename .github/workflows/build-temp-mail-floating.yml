@@ -43,7 +43,7 @@ jobs:
           curl -fL --retry 3 https://github.com/iBotPeaches/Apktool/releases/download/v2.10.0/apktool_2.10.0.jar -o work/apktool.jar
 
       - name: Decode the unchanged original APK
-        run: java -jar work/apktool.jar d -f com.tempmail-4.09.apk -o work/temp-mail-decoded
+        run: java -jar work/apktool.jar d -f -r com.tempmail-4.09.apk -o work/temp-mail-decoded
 
       - name: Compile the overlay helper
         shell: bash
