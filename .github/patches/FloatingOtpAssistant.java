@@ -4,13 +4,11 @@ import android.accessibilityservice.AccessibilityService;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
 import android.provider.Settings;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.graphics.Color;
 import android.os.Bundle;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Html;
@@ -43,6 +41,8 @@ public final class FloatingOtpAssistant {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static WindowManager activeWindowManager;
     private static View activeFloatingView;
+    private static AccessibilityService accessibilityService;
+    private static TextView currentAddressView;
     private static final Pattern OTP = Pattern.compile(
             "(?i)(?:otp|one[- ]time(?: password)?|verification|security|access|login)\\s*(?:code|pin)?\\D{0,48}([0-9]{4,8})(?![0-9])");
 
@@ -54,6 +54,8 @@ public final class FloatingOtpAssistant {
         Activity activity = (Activity) context;
         View content = activity.findViewById(android.R.id.content);
         if (!(content instanceof ViewGroup) || content.findViewWithTag("tempmail-floating-toggle") != null) return;
+        int addressId = resourceId("id", "text");
+        currentAddressView = addressId == 0 ? null : activity.findViewById(addressId);
         Button toggle = button(activity, "Floating OTP");
         toggle.setTag("tempmail-floating-toggle");
         toggle.setContentDescription("Floating OTP assistant toggle");
@@ -61,35 +63,37 @@ public final class FloatingOtpAssistant {
         toggleParams.setMargins(dp(activity, 12), dp(activity, 12), dp(activity, 16), dp(activity, 16));
         ((ViewGroup) content).addView(toggle, toggleParams);
         toggle.setOnClickListener(v -> {
-            if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(activity)) {
-                toggle.setText("Allow floating");
-                Intent permission = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + activity.getPackageName()));
-                activity.startActivity(permission);
+            if (accessibilityService == null) {
+                toggle.setText("Enable accessibility");
+                activity.startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                 return;
             }
             if (activeFloatingView != null) {
                 removeFloating();
                 toggle.setText("Floating OTP");
             } else {
-                showFloating(activity);
+                showFloating(accessibilityService);
                 toggle.setText("Turn floating off");
             }
         });
     }
 
-    private static void showFloating(Activity activity) {
-        RelativeLayout root = new RelativeLayout(activity);
+    /** Called from the original Temp Mail accessibility service's onCreate. */
+    public static void setAccessibilityService(AccessibilityService service) {
+        accessibilityService = service;
+    }
+
+    private static void showFloating(AccessibilityService service) {
+        RelativeLayout root = new RelativeLayout(service);
         root.setBackgroundColor(Color.WHITE);
         activeFloatingView = root;
-        attach(activity, root);
-        WindowManager manager = (WindowManager) activity.getSystemService(Context.WINDOW_SERVICE);
-        int type = Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                : WindowManager.LayoutParams.TYPE_PHONE;
+        attach(service, root);
+        WindowManager manager = (WindowManager) service.getSystemService(Context.WINDOW_SERVICE);
+        int type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(-1, -2, type,
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, android.graphics.PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(activity, 48);
+        params.y = dp(service, 48);
         manager.addView(root, params);
         activeWindowManager = manager;
     }
@@ -107,6 +111,7 @@ public final class FloatingOtpAssistant {
         int textId = resourceId("id", "text");
         TextView address = textId == 0 ? null : root.findViewById(textId);
         if (address == null && context instanceof Activity && textId != 0) address = ((Activity) context).findViewById(textId);
+        if (address == null) address = currentAddressView;
         final TextView mailboxAddress = address;
 
         LinearLayout panel = new LinearLayout(context);
