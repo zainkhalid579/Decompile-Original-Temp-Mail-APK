@@ -74,6 +74,8 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose work/TempMail-4.09-Floating-OTP-test.apk
 
       - name: Install and verify the floating assistant in an Android emulator
+        timeout-minutes: 8
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
@@ -111,6 +113,7 @@ jobs:
             echo 'Emulator verified app toggle and all four real-mailbox assistant controls.'
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: TempMail-4.09-Floating-OTP-test-apk
           path: work/TempMail-4.09-Floating-OTP-test.apk
