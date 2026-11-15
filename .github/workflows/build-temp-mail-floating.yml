@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - '.github/workflows/build-temp-mail-floating.yml'
-      - '.github/patches/**'
+      - '.github/trigger-floating-build'
 
 permissions:
   contents: read
@@ -21,7 +20,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK packages
+      - name: Install Android build tools
         shell: bash
         run: |
           set -euo pipefail
@@ -36,48 +35,47 @@ jobs:
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
+      - name: Download Apktool
+        run: |
+          set -euo pipefail
+          mkdir -p work
+          curl -fL --retry 3 https://github.com/iBotPeaches/Apktool/releases/download/v2.10.0/apktool_2.10.0.jar -o work/apktool.jar
 
-      - name: Download JADX
+      - name: Decode the unchanged original APK
+        run: java -jar work/apktool.jar d -f com.tempmail-4.09.apk -o work/temp-mail-decoded
+
+      - name: Compile the overlay helper
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p tools/jadx
-          curl -fL --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip -o jadx.zip
-          unzip -q jadx.zip -d tools/jadx
-          chmod +x tools/jadx/bin/jadx
+          ANDROID_JAR="$ANDROID_HOME/platforms/android-36/android.jar"
+          mkdir -p work/helper-classes work/helper-dex
+          javac -source 8 -target 8 -classpath "$ANDROID_JAR" \
+            -d work/helper-classes .github/patches/FloatingOtpAssistant.java
+          jar --create --file work/helper.jar -C work/helper-classes .
+          "$ANDROID_HOME/build-tools/36.0.0/d8" --min-api 26 --lib "$ANDROID_JAR" \
+            --output work/helper-dex work/helper.jar
 
-      - name: Decompile the unchanged original APK
+      - name: Patch and rebuild Temp Mail
+        run: python3 .github/patches/patch_original_apk.py work/temp-mail-decoded work/helper-dex/classes.dex
+
+      - name: Align and sign the test APK
         shell: bash
         run: |
-          set -uo pipefail
-          set +e
-          tools/jadx/bin/jadx --show-bad-code --deobf --export-gradle \
-            --export-gradle-type android-app -d work/temp-mail-decompiled com.tempmail-4.09.apk
-          jadx_status=$?
-          set -e
-          if [[ "$jadx_status" -ne 0 && "$jadx_status" -ne 3 ]]; then
-            echo "JADX failed with exit code $jadx_status"
-            exit "$jadx_status"
-          fi
-          test -d work/temp-mail-decompiled/app/src/main
-          if [[ "$jadx_status" -eq 3 ]]; then
-            echo '::warning::JADX reported partial source reconstruction; proceeding to compile the generated project.'
-          fi
-
-      - name: Add the assistant to Temp Mail's existing overlay
-        run: python3 .github/patches/apply_float_assistant.py work/temp-mail-decompiled
-
-      - name: Build Temp Mail debug APK
-        working-directory: work/temp-mail-decompiled
-        run: gradle --no-daemon :app:assembleDebug
+          set -euo pipefail
+          keytool -genkeypair -v -keystore work/test-signing.jks -storepass android \
+            -keypass android -alias tempmail-test -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname 'CN=Temp Mail Test Build, OU=Local, O=Temp Mail, L=Unknown, S=Unknown, C=US'
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 work/temp-mail-merged.apk work/temp-mail-aligned.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks work/test-signing.jks \
+            --ks-key-alias tempmail-test --ks-pass pass:android --key-pass pass:android \
+            --out work/TempMail-4.09-Floating-OTP-test.apk work/temp-mail-aligned.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose work/TempMail-4.09-Floating-OTP-test.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TempMail-4.09-Floating-OTP-assistant-debug
-          path: work/temp-mail-decompiled/app/build/outputs/apk/debug/app-debug.apk
+          name: TempMail-4.09-Floating-OTP-test-apk
+          path: work/TempMail-4.09-Floating-OTP-test.apk
           if-no-files-found: error
           retention-days: 7
 
