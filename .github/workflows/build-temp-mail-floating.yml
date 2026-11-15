@@ -45,6 +45,9 @@ jobs:
       - name: Decode the unchanged original APK
         run: java -jar work/apktool.jar d -f -r com.tempmail-4.09.apk -o work/temp-mail-decoded
 
+      - name: Decode only the manifest text for the overlay permission
+        run: java -jar work/apktool.jar d -f -s com.tempmail-4.09.apk -o work/temp-mail-manifest
+
       - name: Compile the overlay helper
         shell: bash
         run: |
