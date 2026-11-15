@@ -74,13 +74,14 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose work/TempMail-4.09-Floating-OTP-test.apk
 
       - name: Install and verify the floating assistant in an Android emulator
-        timeout-minutes: 8
+        timeout-minutes: 10
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          api-level: 35
           target: google_apis
           arch: x86_64
           profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 4096
           script: |
             set -euo pipefail
             adb install --no-streaming work/TempMail-4.09-Floating-OTP-test.apk
