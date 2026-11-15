@@ -73,16 +73,29 @@ for file in activities:
 if not activity_patched:
     raise SystemExit("Could not add the Floating OTP toggle after MainActivity.setContentView")
 
-manifest = decoded / "AndroidManifest.xml"
-manifest_bytes = manifest.read_bytes()
-manifest_source = manifest
-if not manifest_bytes.lstrip().startswith(b"<"):
-    manifest_source = decoded.parent / "temp-mail-manifest" / "AndroidManifest.xml"
-manifest_text = manifest_source.read_text(encoding="utf-8")
-overlay_permission = '<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />'
-if overlay_permission not in manifest_text:
-    manifest_text = re.sub(r"(<manifest\b[^>]*>)", r"\1\n    " + overlay_permission, manifest_text, count=1)
-    manifest.write_text(manifest_text, encoding="utf-8")
+services = list(decoded.glob("smali*/com/tempmail/data/services/AutoFillAccessibilityService.smali"))
+service_patched = False
+service_hook = "invoke-static {p0}, Lcom/tempmail/data/services/FloatingOtpAssistant;->setAccessibilityService(Landroid/accessibilityservice/AccessibilityService;)V"
+for file in services:
+    text = file.read_text(encoding="utf-8")
+    for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
+        method = declaration.group(0)
+        if "onCreate()V" not in method:
+            continue
+        if "FloatingOtpAssistant;->setAccessibilityService" in method:
+            service_patched = True
+            break
+        super_call = re.search(r"(?m)^\s*invoke-super\s+\{p0\},\s*Landroid/accessibilityservice/AccessibilityService;->onCreate\(\)V\s*$", method)
+        if super_call:
+            insertion = declaration.start() + super_call.end()
+            text = text[:insertion] + "\n    " + service_hook + text[insertion:]
+            file.write_text(text, encoding="utf-8")
+            service_patched = True
+            break
+    if service_patched:
+        break
+if not service_patched:
+    raise SystemExit("Could not register the Temp Mail accessibility service instance")
 
 # APKTool rebuilds the original dex files. Add the helper DEX as a new multidex entry.
 apk = decoded.parent / "temp-mail-unsigned.apk"
