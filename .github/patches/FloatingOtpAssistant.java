@@ -375,7 +375,7 @@ public final class FloatingOtpAssistant {
             catch (Throwable ignored) { continue; }
             for (Method candidate : methods) {
                 Class<?>[] parameters = candidate.getParameterTypes();
-                if (!candidate.getName().equals(name) || parameters.length < args.length + 1) continue;
+                if (!candidate.getName().equals(name) || parameters.length != args.length + 1) continue;
                 int continuationIndex = parameters.length - 1;
                 if (!parameters[continuationIndex].isInterface()) continue;
                 boolean matches = true;
@@ -393,7 +393,7 @@ public final class FloatingOtpAssistant {
         }
         for (Method candidate : type.getMethods()) {
             Class<?>[] parameters = candidate.getParameterTypes();
-            if (!candidate.getName().equals(name) || parameters.length < args.length + 1
+            if (!candidate.getName().equals(name) || parameters.length != args.length + 1
                     || !parameters[parameters.length - 1].isInterface()) continue;
             boolean matches = true;
             for (int i = 0; i < args.length; i++) {
