@@ -202,7 +202,7 @@ public final class FloatingOtpAssistant {
     private static void loadLatest(Context service, TextView status, Button pasteOtp) {
         IO.execute(() -> {
             try {
-                Object inbox = construct("com.tempmail.data.repository.InboxRepository", context);
+                Object inbox = construct("com.tempmail.data.repository.InboxRepository", service);
                 Object list = invokeWithContinuation(inbox, "m48342I", new Object[0]);
                 if (!(list instanceof List)) throw new IllegalStateException("Inbox list is unavailable");
                 Object latest = null;
@@ -219,7 +219,7 @@ public final class FloatingOtpAssistant {
                     return;
                 }
                 Object id = call(latest, "getEid");
-                Object mailRepository = construct("com.tempmail.data.repository.MailRepository", context);
+                Object mailRepository = construct("com.tempmail.data.repository.MailRepository", service);
                 suspendCall(mailRepository, "m48374C", new Object[]{String.valueOf(id)}, result -> {
                     Object mail = payload(result);
                     if (mail == null) {
