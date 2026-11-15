@@ -89,10 +89,10 @@ public final class FloatingOtpAssistant {
         attach(service, root);
         WindowManager manager = (WindowManager) service.getSystemService(Context.WINDOW_SERVICE);
         int type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(-1, -2, type,
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(dp(service, 184), -2, type,
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, android.graphics.PixelFormat.TRANSLUCENT);
-        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(service, 48);
+        params.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
+        params.x = dp(service, 8);
         manager.addView(root, params);
         activeWindowManager = manager;
     }
@@ -139,20 +139,26 @@ public final class FloatingOtpAssistant {
             close.setOnClickListener(v -> removeFloating());
         }
 
-        LinearLayout first = row(context);
-        panel.addView(first);
         Button change = button(context, "Change email");
         Button pasteEmail = button(context, "Paste email");
-        first.addView(change, weightParams());
-        first.addView(pasteEmail, weightParams());
-
-        LinearLayout second = row(context);
-        panel.addView(second);
         Button refresh = button(context, "Refresh inbox");
         Button pasteOtp = button(context, "Paste OTP");
         pasteOtp.setEnabled(false);
-        second.addView(refresh, weightParams());
-        second.addView(pasteOtp, weightParams());
+        if (overlay == activeFloatingView) {
+            panel.addView(change, verticalButtonParams(context));
+            panel.addView(pasteEmail, verticalButtonParams(context));
+            panel.addView(refresh, verticalButtonParams(context));
+            panel.addView(pasteOtp, verticalButtonParams(context));
+        } else {
+            LinearLayout first = row(context);
+            panel.addView(first);
+            first.addView(change, weightParams());
+            first.addView(pasteEmail, weightParams());
+            LinearLayout second = row(context);
+            panel.addView(second);
+            second.addView(refresh, weightParams());
+            second.addView(pasteOtp, weightParams());
+        }
 
         if (mailboxAddress != null) pasteEmail.setOnClickListener(v -> paste(context, mailboxAddress.getText().toString(), status));
         pasteOtp.setOnClickListener(v -> {
@@ -309,11 +315,44 @@ public final class FloatingOtpAssistant {
         types[args.length] = continuationType;
         values[args.length] = continuation;
         try {
-            Method call = owner.getClass().getMethod(name, types);
+            Method call = findSuspendMethod(owner.getClass(), name, values, continuation);
+            if (call == null) throw new NoSuchMethodException(owner.getClass().getName() + "." + name);
             return call.invoke(owner, values);
         } catch (Throwable error) {
             throw unwrap(error);
         }
+    }
+
+    private static Method findSuspendMethod(Class<?> type, String name, Object[] values, Object continuation) {
+        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+            for (Method candidate : current.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (!candidate.getName().equals(name) || parameters.length != values.length) continue;
+                boolean matches = true;
+                for (int i = 0; i < parameters.length; i++) {
+                    Object value = i == parameters.length - 1 ? continuation : values[i];
+                    if (value != null && !box(parameters[i]).isInstance(value)) { matches = false; break; }
+                }
+                if (matches) {
+                    try { candidate.setAccessible(true); } catch (Throwable ignored) { }
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Class<?> box(Class<?> type) {
+        if (!type.isPrimitive()) return type;
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == float.class) return Float.class;
+        if (type == double.class) return Double.class;
+        if (type == short.class) return Short.class;
+        if (type == byte.class) return Byte.class;
+        if (type == char.class) return Character.class;
+        return type;
     }
 
     private static boolean isSuspended(Object value) {
@@ -363,9 +402,12 @@ public final class FloatingOtpAssistant {
                 AccessibilityNodeInfo root = service.getRootInActiveWindow();
                 AccessibilityNodeInfo target = findFocused(root);
                 if (target != null && target.refresh() && target.isEditable()) {
+                    target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                    target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                     Bundle args = new Bundle();
                     args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
                     pasted = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    if (pasted) target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 }
             }
         } catch (Throwable ignored) { }
@@ -407,6 +449,11 @@ public final class FloatingOtpAssistant {
     }
 
     private static LinearLayout.LayoutParams weightParams() { return new LinearLayout.LayoutParams(0, -2, 1f); }
+    private static LinearLayout.LayoutParams verticalButtonParams(Context context) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = dp(context, 3);
+        return params;
+    }
     private static int dp(Context service, int value) {
         return (int) (value * service.getResources().getDisplayMetrics().density + 0.5f);
     }
