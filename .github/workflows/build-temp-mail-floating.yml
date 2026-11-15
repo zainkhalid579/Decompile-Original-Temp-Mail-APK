@@ -106,6 +106,20 @@ jobs:
             sleep 3
             adb shell uiautomator dump /sdcard/temp-mail-ui.xml >/dev/null
             adb pull /sdcard/temp-mail-ui.xml work/temp-mail-ui.xml >/dev/null
+            python3 - <<'PY'
+            import re
+            xml = open('work/temp-mail-ui.xml', encoding='utf-8').read()
+            match = re.search(r'<node[^>]*text="OTP"[^>]*bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"', xml)
+            if not match:
+                raise SystemExit('Persistent floating OTP button was not present')
+            x1, y1, x2, y2 = map(int, match.groups())
+            open('work/bubble-center.txt', 'w').write(f'{(x1+x2)//2} {(y1+y2)//2}')
+            PY
+            read -r BX BY < work/bubble-center.txt
+            adb shell input tap "$BX" "$BY"
+            sleep 2
+            adb shell uiautomator dump /sdcard/temp-mail-ui.xml >/dev/null
+            adb pull /sdcard/temp-mail-ui.xml work/temp-mail-ui.xml >/dev/null
             grep -q 'Change email' work/temp-mail-ui.xml
             grep -q 'Paste email' work/temp-mail-ui.xml
             grep -q 'Refresh inbox' work/temp-mail-ui.xml
