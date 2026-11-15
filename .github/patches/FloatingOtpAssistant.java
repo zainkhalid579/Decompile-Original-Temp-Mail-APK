@@ -50,6 +50,10 @@ public final class FloatingOtpAssistant {
 
     /** Installs an always-visible in-app toggle on Temp Mail's main screen. */
     public static void installInApp(Context context) {
+        if (context instanceof AccessibilityService) {
+            accessibilityService = (AccessibilityService) context;
+            return;
+        }
         if (!(context instanceof Activity)) return;
         Activity activity = (Activity) context;
         View content = activity.findViewById(android.R.id.content);
@@ -78,11 +82,6 @@ public final class FloatingOtpAssistant {
         });
     }
 
-    /** Called from the original Temp Mail accessibility service's onCreate. */
-    public static void setAccessibilityService(AccessibilityService service) {
-        accessibilityService = service;
-    }
-
     private static void showFloating(AccessibilityService service) {
         RelativeLayout root = new RelativeLayout(service);
         root.setBackgroundColor(Color.WHITE);
@@ -105,7 +104,14 @@ public final class FloatingOtpAssistant {
         activeWindowManager = null;
     }
 
-    public static void attach(Context context, View overlay) {
+    public static void attach(Context context, Object overlay) {
+        if (context instanceof AccessibilityService) {
+            accessibilityService = (AccessibilityService) context;
+            if (!(overlay instanceof View)) return;
+        } else if (context instanceof Activity) {
+            installInApp(context);
+            return;
+        }
         if (!(overlay instanceof RelativeLayout)) return;
         RelativeLayout root = (RelativeLayout) overlay;
         int textId = resourceId("id", "text");
