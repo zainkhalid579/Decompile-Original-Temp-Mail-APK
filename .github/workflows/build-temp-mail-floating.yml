@@ -75,7 +75,6 @@ jobs:
 
       - name: Install and verify the floating assistant in an Android emulator
         timeout-minutes: 8
-        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
@@ -84,7 +83,7 @@ jobs:
           profile: pixel_2
           script: |
             set -euo pipefail
-            adb install work/TempMail-4.09-Floating-OTP-test.apk
+            adb install --no-streaming work/TempMail-4.09-Floating-OTP-test.apk
             adb shell settings put secure enabled_accessibility_services 'com.tempmail/com.tempmail.data.services.AutoFillAccessibilityService'
             adb shell settings put secure accessibility_enabled 1
             adb shell monkey -p com.tempmail 1
