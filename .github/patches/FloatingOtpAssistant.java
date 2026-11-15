@@ -188,15 +188,12 @@ public final class FloatingOtpAssistant {
         }
 
         pasteEmail.setOnClickListener(v -> {
-            if (mailboxAddress != null) {
-                paste(context, mailboxAddress.getText().toString(), status);
-                return;
-            }
             status.setText("Loading the current Temp Mail address…");
             IO.execute(() -> {
                 String email = getCurrentEmail(context);
                 MAIN.post(() -> {
-                    if (email == null || email.isEmpty()) status.setText("Current mailbox address is unavailable.");
+                    if (email != null && email.startsWith("ERROR:")) status.setText("Mailbox lookup failed: " + email.substring(6));
+                    else if (email == null || email.isEmpty()) status.setText("Current mailbox address is unavailable.");
                     else paste(context, email, status);
                 });
             });
@@ -373,10 +370,14 @@ public final class FloatingOtpAssistant {
 
     private static Method findSuspendMethod(Class<?> type, String name, Object[] args) {
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
-            for (Method candidate : current.getDeclaredMethods()) {
+            Method[] methods;
+            try { methods = current.getDeclaredMethods(); }
+            catch (Throwable ignored) { continue; }
+            for (Method candidate : methods) {
                 Class<?>[] parameters = candidate.getParameterTypes();
-                if (!candidate.getName().equals(name) || parameters.length != args.length + 1) continue;
-                if (!parameters[parameters.length - 1].getName().equals("kotlin.coroutines.Continuation")) continue;
+                if (!candidate.getName().equals(name) || parameters.length < args.length + 1) continue;
+                int continuationIndex = parameters.length - 1;
+                if (!parameters[continuationIndex].isInterface()) continue;
                 boolean matches = true;
                 for (int i = 0; i < args.length; i++) {
                     if (args[i] != null && !box(parameters[i]).isAssignableFrom(args[i].getClass())) {
@@ -384,8 +385,24 @@ public final class FloatingOtpAssistant {
                         break;
                     }
                 }
-                if (matches) return candidate;
+                if (matches) {
+                    try { candidate.setAccessible(true); } catch (Throwable ignored) { }
+                    return candidate;
+                }
             }
+        }
+        for (Method candidate : type.getMethods()) {
+            Class<?>[] parameters = candidate.getParameterTypes();
+            if (!candidate.getName().equals(name) || parameters.length < args.length + 1
+                    || !parameters[parameters.length - 1].isInterface()) continue;
+            boolean matches = true;
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] != null && !box(parameters[i]).isAssignableFrom(args[i].getClass())) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) return candidate;
         }
         return null;
     }
@@ -435,14 +452,15 @@ public final class FloatingOtpAssistant {
     private static String getCurrentEmail(Context context) {
         try {
             Class<?> databaseClass = Class.forName("com.tempmail.data.p026db.AppDatabase");
-            Object companion = databaseClass.getField("Companion").get(null);
-            Object database = companion.getClass().getMethod("getInstance", Context.class).invoke(companion, context);
+            Object database = databaseClass.getMethod("getInstance", Context.class).invoke(null, context);
             Object dao = databaseClass.getMethod("mailboxDao").invoke(database);
             Object rows = dao.getClass().getMethod("getDefaultMailboxSync").invoke(dao);
             if (rows instanceof List && !((List<?>) rows).isEmpty()) {
                 return callString(((List<?>) rows).get(0), "getFullEmailAddress");
             }
-        } catch (Throwable ignored) { }
+        } catch (Throwable error) {
+            return "ERROR:" + safe(unwrap(error));
+        }
         return "";
     }
 
