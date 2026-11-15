@@ -1,19 +1,27 @@
 package com.tempmail.data.services;
 
 import android.accessibilityservice.AccessibilityService;
+import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.provider.Settings;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Html;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Gravity;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
@@ -33,58 +41,118 @@ import java.util.regex.Pattern;
 public final class FloatingOtpAssistant {
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static WindowManager activeWindowManager;
+    private static View activeFloatingView;
     private static final Pattern OTP = Pattern.compile(
             "(?i)(?:otp|one[- ]time(?: password)?|verification|security|access|login)\\s*(?:code|pin)?\\D{0,48}([0-9]{4,8})(?![0-9])");
 
     private FloatingOtpAssistant() { }
 
+    /** Installs an always-visible in-app toggle on Temp Mail's main screen. */
+    public static void installInApp(Context context) {
+        if (!(context instanceof Activity)) return;
+        Activity activity = (Activity) context;
+        View content = activity.findViewById(android.R.id.content);
+        if (!(content instanceof ViewGroup) || content.findViewWithTag("tempmail-floating-toggle") != null) return;
+        Button toggle = button(activity, "Floating OTP");
+        toggle.setTag("tempmail-floating-toggle");
+        toggle.setContentDescription("Floating OTP assistant toggle");
+        FrameLayout.LayoutParams toggleParams = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
+        toggleParams.setMargins(dp(activity, 12), dp(activity, 12), dp(activity, 16), dp(activity, 16));
+        ((ViewGroup) content).addView(toggle, toggleParams);
+        toggle.setOnClickListener(v -> {
+            if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(activity)) {
+                toggle.setText("Allow floating");
+                Intent permission = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + activity.getPackageName()));
+                activity.startActivity(permission);
+                return;
+            }
+            if (activeFloatingView != null) {
+                removeFloating();
+                toggle.setText("Floating OTP");
+            } else {
+                showFloating(activity);
+                toggle.setText("Turn floating off");
+            }
+        });
+    }
+
+    private static void showFloating(Activity activity) {
+        RelativeLayout root = new RelativeLayout(activity);
+        root.setBackgroundColor(Color.WHITE);
+        activeFloatingView = root;
+        attach(activity, root);
+        WindowManager manager = (WindowManager) activity.getSystemService(Context.WINDOW_SERVICE);
+        int type = Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(-1, -2, type,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, android.graphics.PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        params.y = dp(activity, 48);
+        manager.addView(root, params);
+        activeWindowManager = manager;
+    }
+
+    private static void removeFloating() {
+        try { if (activeWindowManager != null && activeFloatingView != null) activeWindowManager.removeView(activeFloatingView); }
+        catch (Throwable ignored) { }
+        activeFloatingView = null;
+        activeWindowManager = null;
+    }
+
     public static void attach(Context context, View overlay) {
-        if (!(context instanceof AccessibilityService)) return;
-        AccessibilityService service = (AccessibilityService) context;
         if (!(overlay instanceof RelativeLayout)) return;
         RelativeLayout root = (RelativeLayout) overlay;
         int textId = resourceId("id", "text");
         TextView address = textId == 0 ? null : root.findViewById(textId);
+        if (address == null && context instanceof Activity && textId != 0) address = ((Activity) context).findViewById(textId);
+        final TextView mailboxAddress = address;
 
-        LinearLayout panel = new LinearLayout(service);
+        LinearLayout panel = new LinearLayout(context);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(service, 8), dp(service, 5), dp(service, 8), dp(service, 8));
+        panel.setPadding(dp(context, 8), dp(context, 5), dp(context, 8), dp(context, 8));
         panel.setBackgroundColor(Color.WHITE);
         RelativeLayout.LayoutParams panelParams = new RelativeLayout.LayoutParams(-1, -2);
         if (textId != 0) panelParams.addRule(RelativeLayout.BELOW, textId);
         root.addView(panel, panelParams);
 
-        TextView status = new TextView(service);
+        TextView status = new TextView(context);
         status.setText("Inbox assistant ready");
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         status.setTextColor(Color.DKGRAY);
         panel.addView(status, new LinearLayout.LayoutParams(-1, -2));
+        if (overlay == activeFloatingView) {
+            Button close = button(context, "Close floating assistant");
+            panel.addView(close, new LinearLayout.LayoutParams(-1, -2));
+            close.setOnClickListener(v -> removeFloating());
+        }
 
-        LinearLayout first = row(service);
+        LinearLayout first = row(context);
         panel.addView(first);
-        Button change = button(service, "Change email");
-        Button pasteEmail = button(service, "Paste email");
+        Button change = button(context, "Change email");
+        Button pasteEmail = button(context, "Paste email");
         first.addView(change, weightParams());
         first.addView(pasteEmail, weightParams());
 
-        LinearLayout second = row(service);
+        LinearLayout second = row(context);
         panel.addView(second);
-        Button refresh = button(service, "Refresh inbox");
-        Button pasteOtp = button(service, "Paste OTP");
+        Button refresh = button(context, "Refresh inbox");
+        Button pasteOtp = button(context, "Paste OTP");
         pasteOtp.setEnabled(false);
         second.addView(refresh, weightParams());
         second.addView(pasteOtp, weightParams());
 
-        if (address != null) pasteEmail.setOnClickListener(v -> paste(service, address.getText().toString(), status));
+        if (mailboxAddress != null) pasteEmail.setOnClickListener(v -> paste(context, mailboxAddress.getText().toString(), status));
         pasteOtp.setOnClickListener(v -> {
             Object code = pasteOtp.getTag();
-            if (code instanceof String) paste(service, (String) code, status);
+            if (code instanceof String) paste(context, (String) code, status);
         });
         change.setOnClickListener(v -> {
             change.setEnabled(false);
             status.setText("Creating a new mailbox…");
             try {
-                Object repository = construct("com.tempmail.data.repository.MailboxRepository", service);
+                Object repository = construct("com.tempmail.data.repository.MailboxRepository", context);
                 suspendCall(repository, "m48413u", new Object[0], result -> {
                     change.setEnabled(true);
                     Object mailbox = payload(result);
@@ -93,7 +161,7 @@ public final class FloatingOtpAssistant {
                         status.setText("Mailbox change failed. Try again.");
                         return;
                     }
-                    if (address != null) address.setText(next);
+                    if (mailboxAddress != null) mailboxAddress.setText(next);
                     pasteOtp.setTag(null);
                     pasteOtp.setEnabled(false);
                     status.setText("Mailbox changed. Refresh to check messages.");
@@ -112,14 +180,14 @@ public final class FloatingOtpAssistant {
             pasteOtp.setEnabled(false);
             status.setText("Refreshing the Temp Mail inbox…");
             try {
-                Object repository = construct("com.tempmail.data.repository.InboxRepository", service);
+                Object repository = construct("com.tempmail.data.repository.InboxRepository", context);
                 suspendCall(repository, "m48347N", new Object[0], result -> {
                     refresh.setEnabled(true);
                     if (!isSuccess(result)) {
                         status.setText("Inbox refresh failed. Try again.");
                         return;
                     }
-                    loadLatest(service, status, pasteOtp);
+                    loadLatest(context, status, pasteOtp);
                 }, error -> {
                     refresh.setEnabled(true);
                     status.setText("Inbox refresh failed: " + safe(error));
@@ -131,10 +199,10 @@ public final class FloatingOtpAssistant {
         });
     }
 
-    private static void loadLatest(AccessibilityService service, TextView status, Button pasteOtp) {
+    private static void loadLatest(Context service, TextView status, Button pasteOtp) {
         IO.execute(() -> {
             try {
-                Object inbox = construct("com.tempmail.data.repository.InboxRepository", service);
+                Object inbox = construct("com.tempmail.data.repository.InboxRepository", context);
                 Object list = invokeWithContinuation(inbox, "m48342I", new Object[0]);
                 if (!(list instanceof List)) throw new IllegalStateException("Inbox list is unavailable");
                 Object latest = null;
@@ -151,7 +219,7 @@ public final class FloatingOtpAssistant {
                     return;
                 }
                 Object id = call(latest, "getEid");
-                Object mailRepository = construct("com.tempmail.data.repository.MailRepository", service);
+                Object mailRepository = construct("com.tempmail.data.repository.MailRepository", context);
                 suspendCall(mailRepository, "m48374C", new Object[]{String.valueOf(id)}, result -> {
                     Object mail = payload(result);
                     if (mail == null) {
@@ -275,21 +343,24 @@ public final class FloatingOtpAssistant {
         catch (Throwable ignored) { return 0; }
     }
 
-    private static void paste(AccessibilityService service, String value, TextView status) {
+    private static void paste(Context context, String value, TextView status) {
         if (value == null || value.isEmpty()) { status.setText("Value is not available."); return; }
         boolean pasted = false;
         try {
-            AccessibilityNodeInfo root = service.getRootInActiveWindow();
-            AccessibilityNodeInfo target = findFocused(root);
-            if (target != null && target.refresh() && target.isEditable()) {
-                Bundle args = new Bundle();
-                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
-                pasted = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+            if (context instanceof AccessibilityService) {
+                AccessibilityService service = (AccessibilityService) context;
+                AccessibilityNodeInfo root = service.getRootInActiveWindow();
+                AccessibilityNodeInfo target = findFocused(root);
+                if (target != null && target.refresh() && target.isEditable()) {
+                    Bundle args = new Bundle();
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+                    pasted = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                }
             }
         } catch (Throwable ignored) { }
         if (pasted) status.setText("Pasted into the focused field.");
         else {
-            ClipboardManager manager = (ClipboardManager) service.getSystemService(AccessibilityService.CLIPBOARD_SERVICE);
+            ClipboardManager manager = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
             manager.setPrimaryClip(ClipData.newPlainText("Temp Mail", value));
             status.setText("Copied. Focus the target field and paste.");
         }
@@ -309,13 +380,13 @@ public final class FloatingOtpAssistant {
         return value == null ? "" : Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString();
     }
 
-    private static LinearLayout row(AccessibilityService service) {
+    private static LinearLayout row(Context service) {
         LinearLayout view = new LinearLayout(service);
         view.setOrientation(LinearLayout.HORIZONTAL);
         return view;
     }
 
-    private static Button button(AccessibilityService service, String text) {
+    private static Button button(Context service, String text) {
         Button view = new Button(service);
         view.setText(text);
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
@@ -325,7 +396,7 @@ public final class FloatingOtpAssistant {
     }
 
     private static LinearLayout.LayoutParams weightParams() { return new LinearLayout.LayoutParams(0, -2, 1f); }
-    private static int dp(AccessibilityService service, int value) {
+    private static int dp(Context service, int value) {
         return (int) (value * service.getResources().getDisplayMetrics().density + 0.5f);
     }
     private static void show(TextView view, String value) { MAIN.post(() -> view.setText(value)); }
