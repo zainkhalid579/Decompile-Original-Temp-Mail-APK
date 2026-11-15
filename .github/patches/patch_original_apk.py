@@ -45,6 +45,41 @@ if not patched:
                 print(f"{line_number}: {line.strip()}")
     raise SystemExit("Could not patch the existing windowed autofill overlay")
 
+# Add a visible in-app toggle after MainActivity installs its content view. This
+# makes the assistant discoverable without waiting for an autofill event.
+activities = list(decoded.glob("smali*/com/tempmail/MainActivity.smali"))
+if not activities:
+    raise SystemExit("MainActivity smali was not found")
+activity_patched = False
+activity_hook = "invoke-static {p0}, Lcom/tempmail/data/services/FloatingOtpAssistant;->installInApp(Landroid/content/Context;)V"
+for file in activities:
+    text = file.read_text(encoding="utf-8")
+    for declaration in re.finditer(r"(?ms)^\.method [^\n]*\n.*?^\.end method", text):
+        method = declaration.group(0)
+        if "onCreate(Landroid/os/Bundle;)V" not in method:
+            continue
+        if "FloatingOtpAssistant;->installInApp" in method:
+            activity_patched = True
+            break
+        content = re.search(r"(?m)^\s*invoke-virtual\s+\{p0,[^}]+\},\s*L[^;]+;->setContentView\(Landroid/view/View;\)V\s*$", method)
+        if content:
+            insertion = declaration.start() + content.end()
+            text = text[:insertion] + "\n    " + activity_hook + text[insertion:]
+            file.write_text(text, encoding="utf-8")
+            activity_patched = True
+            break
+    if activity_patched:
+        break
+if not activity_patched:
+    raise SystemExit("Could not add the Floating OTP toggle after MainActivity.setContentView")
+
+manifest = decoded / "AndroidManifest.xml"
+manifest_text = manifest.read_text(encoding="utf-8")
+overlay_permission = '<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />'
+if overlay_permission not in manifest_text:
+    manifest_text = re.sub(r"(<manifest\b[^>]*>)", r"\1\n    " + overlay_permission, manifest_text, count=1)
+    manifest.write_text(manifest_text, encoding="utf-8")
+
 # APKTool rebuilds the original dex files. Add the helper DEX as a new multidex entry.
 apk = decoded.parent / "temp-mail-unsigned.apk"
 import subprocess
